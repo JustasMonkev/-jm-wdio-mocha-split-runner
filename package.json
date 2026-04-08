@@ -1,6 +1,6 @@
 {
-  "name": "@jm/wdio-mocha-split-runner",
-  "version": "0.0.1-beta.0",
+  "name": "jm-wdio-mocha-split-runner",
+  "version": "0.0.2-beta",
   "description": "Experimental Mocha-first intra-spec parallel launcher for WebdriverIO",
   "author": "JustasMonkev",
   "homepage": "https://github.com/JustasMonkev/-jm-wdio-mocha-split-runner",

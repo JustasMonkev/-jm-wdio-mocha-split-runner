@@ -1,8 +1,13 @@
-# `@jm/wdio-mocha-split-runner`
+# `jm-wdio-mocha-split-runner`
 
 Experimental Mocha-first intra-spec parallel runner for WebdriverIO.
 
 This package wraps the stock WDIO launcher and can split a single Mocha spec file into multiple worker jobs before execution starts. It is aimed at suites where a few large spec files dominate total runtime and file-level parallelism is not enough.
+
+NPM package:
+
+- `jm-wdio-mocha-split-runner`
+- https://www.npmjs.com/package/jm-wdio-mocha-split-runner
 
 ## What It Solves
 
@@ -32,7 +37,7 @@ This package adds an optional split phase:
 ## Install
 
 ```bash
-npm install @jm/wdio-mocha-split-runner
+npm install jm-wdio-mocha-split-runner
 ```
 
 ## Run
