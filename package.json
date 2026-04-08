@@ -1,0 +1,79 @@
+{
+  "name": "@jm/wdio-mocha-split-runner",
+  "version": "0.0.1-beta.0",
+  "description": "Experimental Mocha-first intra-spec parallel launcher for WebdriverIO",
+  "author": "JustasMonkev",
+  "homepage": "https://github.com/JustasMonkev/-jm-wdio-mocha-split-runner",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.20.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/JustasMonkev/-jm-wdio-mocha-split-runner",
+    "directory": "packages/custom-runner"
+  },
+  "keywords": [
+    "webdriver",
+    "webdriverio",
+    "wdio",
+    "mocha",
+    "parallel"
+  ],
+  "bin": {
+    "wdio-mocha-split-runner": "./bin/wdio-mocha-split-runner.js"
+  },
+  "type": "module",
+  "types": "./build/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./build/index.d.ts",
+      "import": "./build/index.js"
+    },
+    "./framework": {
+      "import": "./build/framework.js"
+    },
+    "./run": {
+      "import": "./build/run.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "npm run test:unit",
+    "test:unit": "vitest run tests/parallel.test.ts tests/launcher.test.ts tests/interface.test.ts",
+    "test:e2e": "npm run build && vitest run tests/e2e.test.ts",
+    "test:all": "npm run test:unit && npm run test:e2e",
+    "example:split": "node ./bin/wdio-mocha-split-runner.js run ./example/wdio.conf.ts",
+    "example:stock": "node ./bin/wdio-mocha-split-runner.js run ./example/wdio.stock.conf.ts",
+    "example:global-limit": "node ./bin/wdio-mocha-split-runner.js run ./example/wdio.global-limit.conf.ts",
+    "example:retry": "node ./bin/wdio-mocha-split-runner.js run ./example/wdio.retry.conf.ts",
+    "example:all": "npm run example:stock && npm run example:split && npm run example:global-limit && npm run example:retry"
+  },
+  "dependencies": {
+    "@vitest/snapshot": "^2.1.1",
+    "@wdio/cli": "9.27.0",
+    "@wdio/config": "9.27.0",
+    "@wdio/globals": "9.27.0",
+    "@wdio/local-runner": "9.27.0",
+    "@wdio/logger": "9.18.0",
+    "@wdio/mocha-framework": "^9.27.0",
+    "@wdio/types": "9.27.0",
+    "@wdio/utils": "9.27.0",
+    "async-exit-hook": "^2.0.1",
+    "chalk": "^5.4.1",
+    "deepmerge-ts": "^7.1.5",
+    "expect-webdriverio": "^5.6.5",
+    "import-meta-resolve": "^4.0.0",
+    "mocha": "^10.7.3",
+    "tsx": "^4.20.6",
+    "webdriverio": "9.27.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.3",
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.4"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

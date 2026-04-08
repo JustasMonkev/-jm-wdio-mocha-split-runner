@@ -1,0 +1,16 @@
+{
+  "extends": "../webdriverio/tsconfig.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "outDir": "./build",
+    "rootDir": "./src",
+    "typeRoots": [
+      "./node_modules/@types",
+      "../webdriverio/node_modules/@types"
+    ]
+  },
+  "include": [
+    "src/**/*",
+    "../webdriverio/@types"
+  ]
+}
