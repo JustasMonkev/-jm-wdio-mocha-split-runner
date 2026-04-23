@@ -34,6 +34,14 @@ export interface ParallelizeTestsConfig {
      */
     maxSplitInstances?: number
     /**
+     * Groups discovered tests into split jobs with up to this many tests each.
+     *
+     * The default is `1`, which preserves one WDIO worker job per discovered
+     * test. Increasing this reduces worker and browser-session startup overhead
+     * for files with many short tests.
+     */
+    batchSize?: number
+    /**
      * Optional file path filters.
      * Only spec files matching one of these substring or wildcard patterns
      * are eligible for splitting.

@@ -2,6 +2,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
 
 import { afterEach, describe, expect, it } from 'vitest'
 
@@ -13,10 +14,11 @@ type TraceEvent = {
     parallelPhase?: string
     title?: string
     testFile?: string | null
+    selectorIds?: string[] | null
     passed?: boolean
 }
 
-const ROOT_DIR = '/Users/justas/Desktop/custom-runner/custom-runner'
+const ROOT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const tempDirs: string[] = []
 
 function getTraceFile(eventsDir: string) {
@@ -169,6 +171,24 @@ describe('wdio-mocha-split-runner chrome e2e', () => {
         }
 
         expect(maxActive).toBeLessThanOrEqual(2)
+    })
+
+    it('batches multiple tests into fewer split workers', { timeout: 120000 }, () => {
+        const result = runScenario('wdio.batch.conf.ts')
+
+        expect(result.status, result.stderr || result.stdout).toBe(0)
+
+        const mixedStarts = result.trace
+            .filter((event) => event.event === 'test:start')
+            .filter((event) => normalizeBasename(event.testFile) === 'mixed.e2e.ts')
+        const mixedRunSessions = result.trace
+            .filter((event) => event.event === 'session:start')
+            .filter((event) => normalizeBasename(event.specFile) === 'mixed.e2e.ts')
+            .filter((event) => event.parallelPhase === 'run')
+
+        expect(mixedStarts).toHaveLength(4)
+        expect(new Set(mixedStarts.map((event) => event.pid)).size).toBe(2)
+        expect(mixedRunSessions.map((event) => new Set(event.selectorIds || []).size).sort()).toEqual([2, 2])
     })
 
     it('retries only the failing split shard', { timeout: 120000 }, () => {

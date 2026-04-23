@@ -21,6 +21,9 @@ const chalkMock = {
     gray: style('gray')
 }
 
+const mixedSpecPath = `${process.cwd()}/example/specs/mixed.e2e.ts`
+const alphaSpecPath = `${process.cwd()}/example/specs/alpha.e2e.ts`
+
 vi.mock('chalk', () => ({
     default: chalkMock,
     supportsColor: { hasBasic: true }
@@ -75,7 +78,7 @@ describe('WDIOCLInterface', () => {
                 browserVersion: '146',
                 platformName: 'macOS'
             },
-            specs: ['/Users/justas/Desktop/custom-runner/custom-runner/example/specs/mixed.e2e.ts'],
+            specs: [mixedSpecPath],
             hasTests: true
         }
 
@@ -130,7 +133,7 @@ describe('WDIOCLInterface', () => {
 
         cli.onSpecSkip('0-1', {
             caps: { browserName: 'chrome' },
-            specs: ['/Users/justas/Desktop/custom-runner/custom-runner/example/specs/alpha.e2e.ts'],
+            specs: [alphaSpecPath],
             hasTests: false
         } as any)
         cli.printSummary()

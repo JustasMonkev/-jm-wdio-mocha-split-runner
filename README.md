@@ -76,6 +76,42 @@ export const config: WebdriverIO.Config = {
 }
 ```
 
+## BrowserStack
+
+BrowserStack support stays on the standard WDIO service path. You do not need a custom `runner` value for BrowserStack; keep using `runner: 'local'` and configure BrowserStack through `services`.
+
+```ts
+export const config: WebdriverIO.Config = {
+    runner: 'local',
+    framework: 'mocha',
+    user: process.env.BROWSERSTACK_USERNAME,
+    key: process.env.BROWSERSTACK_ACCESS_KEY,
+    services: [[
+        'browserstack',
+        {
+            testReporting: true,
+            browserstackLocal: true
+        }
+    ]],
+    capabilities: [{
+        browserName: 'chrome',
+        'bstack:options': {
+            os: 'OS X',
+            osVersion: 'Sonoma'
+        }
+    }],
+    parallelizeTests: {
+        enabled: true
+    }
+}
+```
+
+Split-mode behavior with BrowserStack:
+
+- real execution workers keep the normal BrowserStack service and CLI lifecycle
+- discovery workers stay local-only so manifest building does not create extra BrowserStack worker-side effects
+- launcher-side BrowserStack setup still runs before scheduling, so BrowserStack orchestration and launcher config mutations remain available
+
 ## `parallelizeTests`
 
 ```ts
@@ -83,6 +119,7 @@ type ParallelizeTestsConfig = {
   enabled: boolean
   maxTestsPerFile?: number
   maxSplitInstances?: number
+  batchSize?: number
   include?: string[]
   tests?: string[]
   retries?: number
@@ -94,6 +131,7 @@ Behavior:
 - `enabled`: turns split mode on
 - `maxTestsPerFile`: max number of split jobs from the same spec file that may run at once
 - `maxSplitInstances`: max number of split jobs that may run at once across the full run
+- `batchSize`: max number of discovered tests to place in one split job, defaulting to `1`
 - `include`: matches spec file paths by substring or wildcard pattern
 - `tests`: matches discovered test file paths by substring or wildcard pattern
 - `retries`: retry count for split jobs, defaulting to `config.specFileRetries`
@@ -109,6 +147,7 @@ Notes:
 
 - `tests` matches discovered test file paths only, not Mocha titles
 - `maxSplitInstances` applies only to split jobs, not normal spec jobs
+- `batchSize` reduces worker and browser-session startup overhead for files with many short tests
 - `mochaOpts.retries` must be `0` when split mode is enabled
 
 ## Workflow
@@ -151,20 +190,22 @@ sequenceDiagram
 
 ## Examples
 
-The checked-in example scenarios live in [example/](/Users/justas/Desktop/custom-runner/custom-runner/example). All of them use Chrome headless.
+The checked-in example scenarios live in [example/](./example). All of them use Chrome headless.
 
 Main example configs:
 
-- [example/wdio.conf.ts](/Users/justas/Desktop/custom-runner/custom-runner/example/wdio.conf.ts): split only `mixed.e2e.ts`
-- [example/wdio.stock.conf.ts](/Users/justas/Desktop/custom-runner/custom-runner/example/wdio.stock.conf.ts): stock WDIO scheduling with split mode off
-- [example/wdio.global-limit.conf.ts](/Users/justas/Desktop/custom-runner/custom-runner/example/wdio.global-limit.conf.ts): two split files with `maxSplitInstances: 2`
-- [example/wdio.retry.conf.ts](/Users/justas/Desktop/custom-runner/custom-runner/example/wdio.retry.conf.ts): flaky shard retry example
+- [example/wdio.conf.ts](./example/wdio.conf.ts): split only `mixed.e2e.ts`
+- [example/wdio.stock.conf.ts](./example/wdio.stock.conf.ts): stock WDIO scheduling with split mode off
+- [example/wdio.batch.conf.ts](./example/wdio.batch.conf.ts): group two tests per split job
+- [example/wdio.global-limit.conf.ts](./example/wdio.global-limit.conf.ts): two split files with `maxSplitInstances: 2`
+- [example/wdio.retry.conf.ts](./example/wdio.retry.conf.ts): flaky shard retry example
 
 Run them:
 
 ```bash
 npm run example:stock
 npm run example:split
+npm run example:batch
 npm run example:global-limit
 npm run example:retry
 ```
@@ -193,6 +234,23 @@ Expected behavior:
 - `alpha.e2e.ts` stays a normal spec job
 - `mixed.e2e.ts` is discovered and split into multiple jobs
 - up to 2 jobs run at once because `maxInstances` is `2`
+
+### Example: Batch Short Tests
+
+```ts
+parallelizeTests: {
+    enabled: true,
+    include: ['**/mixed.e2e.ts'],
+    batchSize: 2,
+    maxTestsPerFile: 2
+}
+```
+
+Expected behavior:
+
+- discovered tests are grouped into jobs with up to 2 tests each
+- a 4-test spec creates 2 split jobs instead of 4
+- each batch still runs through Mocha shard pruning in a normal WDIO worker
 
 ### Example: Global Split Cap
 
@@ -287,10 +345,10 @@ beforeSession(config) {
 
 ## Project Layout
 
-- [src/](/Users/justas/Desktop/custom-runner/custom-runner/src): launcher, runtime, and Mocha shard logic
-- [tests/](/Users/justas/Desktop/custom-runner/custom-runner/tests): unit tests and Chrome e2e tests
-- [example/](/Users/justas/Desktop/custom-runner/custom-runner/example): runnable Chrome scenarios
-- [bin/wdio-mocha-split-runner.js](/Users/justas/Desktop/custom-runner/custom-runner/bin/wdio-mocha-split-runner.js): package entrypoint
+- [src/](./src): launcher, runtime, and Mocha shard logic
+- [tests/](./tests): unit tests and Chrome e2e tests
+- [example/](./example): runnable Chrome scenarios
+- [bin/wdio-mocha-split-runner.js](./bin/wdio-mocha-split-runner.js): package entrypoint
 
 ## Development
 
@@ -314,6 +372,7 @@ Scenario commands:
 ```bash
 npm run example:stock
 npm run example:split
+npm run example:batch
 npm run example:global-limit
 npm run example:retry
 npm run example:all

@@ -10,6 +10,7 @@ import { buildManifest, createMochaRuntime } from './framework.js'
 import { classifyDiscoveryError } from './mocha/parallel.js'
 import type { ParallelDiscoveryPayload, ParallelRuntimeConfig } from './types.js'
 import { initializeStubSession } from './stub-session.js'
+import { getDiscoveryIgnoredWorkerServices, getDiscoveryServices } from './browserstack.js'
 
 const log = logger('@jm/wdio-mocha-split-runner:discover')
 
@@ -25,7 +26,15 @@ process.on('message', async (payload: ParallelDiscoveryPayload) => {
         const config = parser.getConfig() as ParallelRuntimeConfig
         logger.setLogLevelsConfig(config.logLevels, config.logLevel)
 
-        const services = await initializeWorkerService(config, payload.caps, payload.args.ignoredWorkerServices)
+        const discoveryConfig = {
+            ...config,
+            services: getDiscoveryServices(config.services || [])
+        }
+        const services = await initializeWorkerService(
+            discoveryConfig,
+            payload.caps,
+            getDiscoveryIgnoredWorkerServices(config.services || [], payload.args.ignoredWorkerServices)
+        )
         services.forEach(parser.addService.bind(parser))
 
         const browser = await initializeStubSession(config, payload.caps)
