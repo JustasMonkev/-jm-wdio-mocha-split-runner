@@ -1,15 +1,10 @@
-import path from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { EventEmitter } from 'node:events'
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import logger from '@wdio/logger'
 
 import ParallelLauncher from '../src/launcher.js'
-
-function getMockPath(modulePath: string) {
-    return path.join(fileURLToPath(new URL('../../webdriverio/__mocks__/', import.meta.url)), modulePath)
-}
 
 const caps: WebdriverIO.Capabilities = {
     browserName: 'chrome',
@@ -33,14 +28,14 @@ vi.mock('@wdio/cli', () => ({
         run = vi.fn()
     }
 }))
-vi.mock('@wdio/utils', () => import(getMockPath('@wdio/utils')))
+vi.mock('@wdio/utils', () => import('../../webdriverio/__mocks__/@wdio/utils'))
 vi.mock('@wdio/utils/node', () => ({
     setupDriver: vi.fn(),
     setupBrowser: vi.fn()
 }))
-vi.mock('@wdio/config', () => import(getMockPath('@wdio/config')))
-vi.mock('@wdio/config/node', () => import(getMockPath('@wdio/config/node')))
-vi.mock('@wdio/logger', () => import(getMockPath('@wdio/logger')))
+vi.mock('@wdio/config', () => import('../../webdriverio/__mocks__/@wdio/config'))
+vi.mock('@wdio/config/node', () => import('../../webdriverio/__mocks__/@wdio/config/node'))
+vi.mock('@wdio/logger', () => import('../../webdriverio/__mocks__/@wdio/logger'))
 vi.mock('../src/cli/interface', () => ({
     default: class {
         totalWorkerCnt: number
@@ -101,6 +96,22 @@ describe('ParallelLauncher', () => {
                 mochaOpts: { retries: 0 }
             } as any, [caps])
         ).rejects.toThrow('`parallelizeTests.maxSplitInstances` must be an integer greater than 0 when set')
+    })
+
+    it('rejects invalid batchSize values', async () => {
+        await expect(
+            launcher['_runMode']({
+                specs: ['./a.js'],
+                shard: { current: 1, total: 1 },
+                maxInstances: 2,
+                runner: 'local',
+                runnerEnv: {},
+                outputDir: './tmp',
+                framework: 'mocha',
+                parallelizeTests: { enabled: true, batchSize: 0 },
+                mochaOpts: { retries: 0 }
+            } as any, [caps])
+        ).rejects.toThrow('`parallelizeTests.batchSize` must be an integer greater than 0 when set')
     })
 
     it('keeps stock formatting behavior when split mode is disabled', () => {
@@ -195,6 +206,98 @@ describe('ParallelLauncher', () => {
                 manifestHash: 'hash'
             }
         ])
+    })
+
+    it('groups split candidates into subset shard jobs when batchSize is greater than one', async () => {
+        vi.spyOn(launcher as any, '_discoverSpecsForFile').mockResolvedValue({
+            specFile: '/a.js',
+            manifestHash: 'hash',
+            tests: [
+                { selectorId: 'suite test 1#0', fullTitle: 'suite test 1', suitePath: ['suite'], file: '/a.js', retries: 0 },
+                { selectorId: 'suite test 2#0', fullTitle: 'suite test 2', suitePath: ['suite'], file: '/a.js', retries: 1 },
+                { selectorId: 'suite test 3#0', fullTitle: 'suite test 3', suitePath: ['suite'], file: '/a.js', retries: 0 }
+            ],
+            fallbackToSpecLevel: false
+        })
+
+        const expanded = await launcher['_expandSplitSpecs']([{ files: ['/a.js'], retries: 3, jobType: 'spec' }] as any, caps, 3, {
+            parallelizeTests: { enabled: true, batchSize: 2 },
+            maxInstances: 4
+        } as any)
+
+        expect(expanded).toEqual([
+            {
+                files: ['/a.js'],
+                retries: 3,
+                jobType: 'subset',
+                specFile: '/a.js',
+                selectorIds: ['suite test 1#0', 'suite test 2#0'],
+                manifestHash: 'hash'
+            },
+            {
+                files: ['/a.js'],
+                retries: 0,
+                jobType: 'test',
+                specFile: '/a.js',
+                selectorId: 'suite test 3#0',
+                manifestHash: 'hash'
+            }
+        ])
+    })
+
+    it('logs discovery phase timing after manifest discovery', async () => {
+        vi.spyOn(launcher as any, '_runDiscoveryWorker').mockResolvedValue({
+            specFile: '/a.js',
+            manifestHash: 'hash',
+            tests: [
+                { selectorId: 'suite test 1#0', fullTitle: 'suite test 1', suitePath: ['suite'], file: '/a.js' }
+            ],
+            fallbackToSpecLevel: false
+        })
+        launcher.configParser.getConfig = vi.fn().mockReturnValue({
+            services: [],
+            execArgv: [],
+            onWorkerStart: [],
+            logLevel: 'debug',
+            logLevels: {}
+        })
+
+        const manifest = await launcher['_discoverSpecsForFile']('/a.js', caps)
+
+        expect(manifest.tests).toHaveLength(1)
+        expect(logger('@jm/wdio-mocha-split-runner').debug).toHaveBeenCalledWith(
+            expect.stringMatching(/\[perf\] discovery for \/a\.js completed in \d+ms \(1 tests\)/)
+        )
+    })
+
+    it('logs worker startup timing when a job starts', async () => {
+        const worker = new EventEmitter() as EventEmitter & { logsAggregator: string[] }
+        worker.logsAggregator = []
+        launcher.runner = {
+            run: vi.fn().mockResolvedValue(worker)
+        } as any
+        launcher['_launcher'] = []
+        launcher.configParser.getConfig = vi.fn().mockReturnValue({
+            execArgv: [],
+            onWorkerStart: [],
+            groupLogsByTestSpec: false,
+            runnerEnv: {},
+            user: undefined,
+            key: undefined
+        })
+
+        await launcher['_startInstance']({
+            files: ['/a.js'],
+            retries: 0,
+            jobType: 'subset',
+            specFile: '/a.js',
+            selectorIds: ['one', 'two'],
+            manifestHash: 'hash'
+        }, caps as any, 0)
+
+        expect(logger('@jm/wdio-mocha-split-runner').debug).toHaveBeenCalledWith(
+            expect.stringMatching(/\[perf\] worker 0-0 started in \d+ms \(subset\)/)
+        )
     })
 
     it('does not split by test title patterns anymore', async () => {

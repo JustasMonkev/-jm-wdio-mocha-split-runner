@@ -39,16 +39,26 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "prepack": "npm run build",
     "test": "npm run test:unit",
-    "test:unit": "vitest run tests/parallel.test.ts tests/launcher.test.ts tests/interface.test.ts",
+    "test:unit": "vitest run tests/parallel.test.ts tests/launcher.test.ts tests/interface.test.ts tests/browserstack.test.ts",
     "test:e2e": "npm run build && vitest run tests/e2e.test.ts",
     "test:all": "npm run test:unit && npm run test:e2e",
     "example:split": "node ./bin/wdio-mocha-split-runner.js run ./example/wdio.conf.ts",
     "example:stock": "node ./bin/wdio-mocha-split-runner.js run ./example/wdio.stock.conf.ts",
+    "example:batch": "node ./bin/wdio-mocha-split-runner.js run ./example/wdio.batch.conf.ts",
     "example:global-limit": "node ./bin/wdio-mocha-split-runner.js run ./example/wdio.global-limit.conf.ts",
     "example:retry": "node ./bin/wdio-mocha-split-runner.js run ./example/wdio.retry.conf.ts",
-    "example:all": "npm run example:stock && npm run example:split && npm run example:global-limit && npm run example:retry"
+    "example:all": "npm run example:stock && npm run example:split && npm run example:batch && npm run example:global-limit && npm run example:retry"
   },
+  "files": [
+    "build",
+    "bin",
+    "src",
+    "example",
+    "README.md",
+    "LICENSE"
+  ],
   "dependencies": {
     "@vitest/snapshot": "^2.1.1",
     "@wdio/cli": "9.27.0",

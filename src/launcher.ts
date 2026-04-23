@@ -16,6 +16,7 @@ import CLInterface from './cli/interface.js'
 import { runLauncherHook, runOnCompleteHook, runServiceHook, nodeVersion, type HookError } from './cli/utils.js'
 import { WORKER_GROUPLOGS_MESSAGES } from './cli/constants.js'
 import type { ParallelDiscoveryPayload, ParallelTestManifest, ParallelWorkerArgs, ParallelizeTestsConfig } from './types.js'
+import { getDiscoveryIgnoredWorkerServices, getDiscoveryLauncherServices } from './browserstack.js'
 
 const log = logger('@jm/wdio-mocha-split-runner')
 
@@ -66,6 +67,7 @@ export default class ParallelLauncher {
     private _launcher?: Services.ServiceInstance[]
     private _resolve?: Function
     private _runningJobs = new Map<string, ParallelWorkerSpecs>()
+    private _jobStartTimes = new Map<string, number>()
 
     constructor(
         private _configFilePath: string,
@@ -215,6 +217,9 @@ export default class ParallelLauncher {
         }
         if (parallel?.maxSplitInstances !== undefined && (!Number.isInteger(parallel.maxSplitInstances) || parallel.maxSplitInstances < 1)) {
             throw new Error('`parallelizeTests.maxSplitInstances` must be an integer greater than 0 when set')
+        }
+        if (parallel?.batchSize !== undefined && (!Number.isInteger(parallel.batchSize) || parallel.batchSize < 1)) {
+            throw new Error('`parallelizeTests.batchSize` must be an integer greater than 0 when set')
         }
     }
 
@@ -378,16 +383,7 @@ export default class ParallelLauncher {
 
             const residualCandidates = manifest.tests.filter((test) => !splitCandidates.some((candidate) => candidate.selectorId === test.selectorId))
 
-            for (const test of splitCandidates) {
-                expandedSpecs.push({
-                    files: [manifest.specFile],
-                    retries: parallelConfig.retries ?? test.retries ?? specFileRetries,
-                    jobType: 'test',
-                    specFile: manifest.specFile,
-                    selectorId: test.selectorId,
-                    manifestHash: manifest.manifestHash
-                })
-            }
+            this._addSplitCandidateJobs(expandedSpecs, manifest, splitCandidates, parallelConfig, specFileRetries)
 
             if (residualCandidates.length > 0) {
                 expandedSpecs.push({
@@ -402,6 +398,41 @@ export default class ParallelLauncher {
         }
 
         return expandedSpecs
+    }
+
+    private _addSplitCandidateJobs(
+        expandedSpecs: ParallelWorkerSpecs[],
+        manifest: ParallelTestManifest,
+        splitCandidates: ParallelTestManifest['tests'],
+        parallelConfig: ParallelizeTestsConfig,
+        specFileRetries: number
+    ) {
+        const batchSize = parallelConfig.batchSize || 1
+
+        for (let index = 0; index < splitCandidates.length; index += batchSize) {
+            const batch = splitCandidates.slice(index, index + batchSize)
+            if (batch.length === 1) {
+                const [test] = batch
+                expandedSpecs.push({
+                    files: [manifest.specFile],
+                    retries: parallelConfig.retries ?? test.retries ?? specFileRetries,
+                    jobType: 'test',
+                    specFile: manifest.specFile,
+                    selectorId: test.selectorId,
+                    manifestHash: manifest.manifestHash
+                })
+                continue
+            }
+
+            expandedSpecs.push({
+                files: [manifest.specFile],
+                retries: parallelConfig.retries ?? specFileRetries,
+                jobType: 'subset',
+                specFile: manifest.specFile,
+                selectorIds: batch.map((test) => test.selectorId),
+                manifestHash: manifest.manifestHash
+            })
+        }
     }
 
     private _getSplitCandidates(manifest: ParallelTestManifest, parallelConfig: ParallelizeTestsConfig) {
@@ -588,9 +619,11 @@ export default class ParallelLauncher {
     }
 
     private async _discoverSpecsForFile(specFile: string, caps: WebdriverIO.Capabilities): Promise<ParallelTestManifest> {
+        const startedAt = Date.now()
         const config = this.configParser.getConfig()
         const discoveryArgs = {
             ...this._buildWorkerArgs(config),
+            ignoredWorkerServices: getDiscoveryIgnoredWorkerServices(config.services || [], this._args.ignoredWorkerServices),
             parallelizeTestsContext: {
                 phase: 'discover' as const,
                 specFile
@@ -603,15 +636,25 @@ export default class ParallelLauncher {
 
         log.info('Run onWorkerStart hook for discovery job')
         await runLauncherHook(config.onWorkerStart, runnerId, workerCaps, [specFile], discoveryArgs as any, execArgv)
-        await runServiceHook(this._launcher!, 'onWorkerStart', runnerId, workerCaps, [specFile], discoveryArgs as any, execArgv)
+        await runServiceHook(
+            getDiscoveryLauncherServices(this._launcher || [], config.services || []),
+            'onWorkerStart',
+            runnerId,
+            workerCaps,
+            [specFile],
+            discoveryArgs as any,
+            execArgv
+        )
 
-        return this._runDiscoveryWorker({
+        const manifest = await this._runDiscoveryWorker({
             cid: runnerId,
             configFile: this._configFilePath,
             specFile,
             caps: workerCaps,
             args: discoveryArgs
         }, execArgv)
+        log.debug(`[perf] discovery for ${specFile} completed in ${Date.now() - startedAt}ms (${manifest.tests.length} tests)`)
+        return manifest
     }
 
     private async _startInstance(
@@ -658,8 +701,10 @@ export default class ParallelLauncher {
         this._runnerStarted++
         const workerCaps = structuredClone(caps)
         const reservedJob = { ...job, rid: runnerId }
+        const startedAt = Date.now()
 
         this._runningJobs.set(runnerId, reservedJob)
+        this._jobStartTimes.set(runnerId, startedAt)
 
         const workerArgs = {
             ...this._buildWorkerArgs(config),
@@ -711,6 +756,7 @@ export default class ParallelLauncher {
                 execArgv,
                 retries: job.retries
             })
+            log.debug(`[perf] worker ${runnerId} started in ${Date.now() - startedAt}ms (${job.jobType || 'spec'})`)
             worker.on('message', this.interface.onMessage.bind(this.interface))
             worker.on('error', this.interface.onMessage.bind(this.interface))
             worker.on('exit', (code) => {
@@ -729,6 +775,7 @@ export default class ParallelLauncher {
             worker.on('exit', this._endHandler.bind(this))
         } catch (error) {
             this._runningJobs.delete(runnerId)
+            this._jobStartTimes.delete(runnerId)
             throw error
         }
     }
@@ -810,7 +857,12 @@ export default class ParallelLauncher {
     private async _endHandler({ cid: rid, exitCode, specs, retries }: EndMessage): Promise<void> {
         const passed = this._isWatchModeHalted() || exitCode === 0
         const job = this._runningJobs.get(rid)
+        const startedAt = this._jobStartTimes.get(rid)
         this._runningJobs.delete(rid)
+        this._jobStartTimes.delete(rid)
+        if (startedAt !== undefined) {
+            log.debug(`[perf] worker ${rid} finished in ${Date.now() - startedAt}ms exitCode=${exitCode} retries=${retries}`)
+        }
 
         if (!passed && retries > 0) {
             const requeue = this.configParser.getConfig().specFileRetriesDeferred ? 'push' : 'unshift'
