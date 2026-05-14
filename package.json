@@ -1,6 +1,6 @@
 {
   "name": "jm-wdio-mocha-split-runner",
-  "version": "0.0.2-beta",
+  "version": "0.0.1",
   "description": "Experimental Mocha-first intra-spec parallel launcher for WebdriverIO",
   "author": "JustasMonkev",
   "homepage": "https://github.com/JustasMonkev/-jm-wdio-mocha-split-runner",
@@ -10,7 +10,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/JustasMonkev/-jm-wdio-mocha-split-runner",
+    "url": "git+https://github.com/JustasMonkev/-jm-wdio-mocha-split-runner.git",
     "directory": "packages/custom-runner"
   },
   "keywords": [
@@ -21,7 +21,7 @@
     "parallel"
   ],
   "bin": {
-    "wdio-mocha-split-runner": "./bin/wdio-mocha-split-runner.js"
+    "wdio-mocha-split-runner": "bin/wdio-mocha-split-runner.js"
   },
   "type": "module",
   "types": "./build/index.d.ts",
