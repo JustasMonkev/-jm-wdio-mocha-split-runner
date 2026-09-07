@@ -22,6 +22,7 @@ export async function runServiceHook(
     return Promise.all(launcher.map(async (service: Services.ServiceInstance) => {
         try {
             if (typeof service[hookName] === 'function') {
+                // SAFETY: The typeof check establishes a callable hook; WDIO supplies its arguments by hook name.
                 await (service[hookName] as Function)(...args)
             }
         } catch (err) {
@@ -95,7 +96,7 @@ export function getRunnerName(caps: WebdriverIO.Capabilities = {}) {
         caps['appium:app']
 
     if (!runner) {
-        runner = Object.values(caps).length === 0 || Object.values(caps).some((cap) => !(cap as { capabilities?: unknown }).capabilities)
+        runner = Object.values(caps).length === 0 || Object.values(caps).some((cap) => !cap?.capabilities)
             ? 'undefined'
             : 'MultiRemote'
     }

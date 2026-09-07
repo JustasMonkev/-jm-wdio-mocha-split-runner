@@ -10,8 +10,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/JustasMonkev/-jm-wdio-mocha-split-runner.git",
-    "directory": "packages/custom-runner"
+    "url": "git+https://github.com/JustasMonkev/-jm-wdio-mocha-split-runner.git"
   },
   "keywords": [
     "webdriver",
@@ -41,7 +40,7 @@
     "build": "tsc -p tsconfig.json",
     "prepack": "npm run build",
     "test": "npm run test:unit",
-    "test:unit": "vitest run tests/parallel.test.ts tests/launcher.test.ts tests/interface.test.ts tests/browserstack.test.ts",
+    "test:unit": "vitest run tests/parallel.test.ts tests/launcher.test.ts tests/interface.test.ts tests/browserstack.test.ts tests/stub-session.test.ts",
     "test:e2e": "npm run build && vitest run tests/e2e.test.ts",
     "test:all": "npm run test:unit && npm run test:e2e",
     "example:split": "node ./bin/wdio-mocha-split-runner.js run ./example/wdio.conf.ts",

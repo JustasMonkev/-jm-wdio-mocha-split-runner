@@ -20,7 +20,7 @@ function getServiceIdentifier(service: Services.ServiceEntry) {
     }
 
     if (Array.isArray(service)) {
-        return getServiceIdentifier(service[0] as Services.ServiceEntry)
+        return getServiceIdentifier(service[0])
     }
 
     if (service && typeof service === 'object') {

@@ -80,4 +80,20 @@ describe('parallel manifest helpers', () => {
         expect(mocha.suite.suites[0].suites[0].tests).toHaveLength(2)
         expect(mocha.suite.suites[0].suites[0].tests.map((test) => test.title)).toEqual(['keep one', 'keep two'])
     })
+
+    it('honors exclusive branches, pending tests, and reusable grep expressions', () => {
+        const mocha = new Mocha()
+        const only = Mocha.Suite.create(mocha.suite, 'only')
+        const other = Mocha.Suite.create(mocha.suite, 'other')
+        only.addTest(new Mocha.Test('keep', () => {}))
+        only.addTest(new Mocha.Test('skip'))
+        other.addTest(new Mocha.Test('drop', () => {}))
+        mocha.suite['_onlySuites'].push(only)
+
+        const grep = /keep/g
+        expect(buildManifest(mocha, '/spec.js', { grep }).tests.map(test => test.fullTitle)).toEqual(['only keep'])
+        expect(buildManifest(mocha, '/spec.js', { grep }).tests.map(test => test.fullTitle)).toEqual(['only keep'])
+        expect(buildManifest(mocha, '/spec.js', { grep, invert: true }).tests).toEqual([])
+    })
+
 })

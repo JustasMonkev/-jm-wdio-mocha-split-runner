@@ -1,28 +1,17 @@
 import { wrapGlobalTestMethod } from '@wdio/utils'
 
 import { INTERFACES, TEST_INTERFACES, MOCHA_TIMEOUT_MESSAGE } from './constants.js'
-import type { FormattedMessage, FrameworkMessage, MochaOpts } from './types.js'
+import type { FormattedMessage, FrameworkMessage, MochaOpts, MochaPayload } from './types.js'
 
 const MOCHA_UI_TYPE_EXTRACTOR = /^(?:.*-)?([^-.]+)(?:.js)?$/
 const DEFAULT_INTERFACE_TYPE = 'bdd'
 
-interface Payload {
-    title: string
-    parent?: Payload | null
-    file?: string
-    duration?: number
-    body?: string
-    context?: unknown
-    state?: string
-    pending?: boolean
-    ctx?: Mocha.Context
-}
 
 export function formatMessage(params: FrameworkMessage) {
     const message: FormattedMessage = {
         type: params.type
     }
-    const payload = params.payload as Payload | undefined
+    const payload = params.payload
     const mochaAllHooksIfPresent = payload?.title?.match(/^"(before|after)( all| each)?" hook/)
 
     if (params.err) {
@@ -60,10 +49,10 @@ export function formatMessage(params: FrameworkMessage) {
 
         let fullTitle = message.title
         if (payload.parent) {
-            let parent = payload.parent
+            let parent: MochaPayload | null | undefined = payload.parent
             while (parent && parent.title) {
                 fullTitle = parent.title + '.' + fullTitle
-                parent = parent.parent as Payload
+                parent = parent.parent
             }
         }
 
@@ -109,19 +98,23 @@ export function requireExternalModules(mods: string[], loader = loadModule) {
 
 type Hook = Function | Function[]
 export function setupEnv(cid: string, options: MochaOpts, beforeTest: Hook, beforeHook: Hook, afterTest: Hook, afterHook: Hook) {
-    const match = MOCHA_UI_TYPE_EXTRACTOR.exec(options.ui!) as unknown as [string, keyof typeof INTERFACES]
-    const type: keyof typeof INTERFACES = (match && INTERFACES[match[1]] && match[1]) || DEFAULT_INTERFACE_TYPE
+    const ui = MOCHA_UI_TYPE_EXTRACTOR.exec(options.ui || '')?.[1]
+    const type = ui === 'tdd' || ui === 'qunit' ? ui : DEFAULT_INTERFACE_TYPE
 
-    const hookArgsFn = (context: Mocha.Context) => [{ ...context.test, parent: context.test?.parent?.title }, context]
+    const hookArgsFn: Parameters<typeof wrapGlobalTestMethod>[2] = (value) => {
+        // SAFETY: The Mocha test interface invokes this callback with its current Context.
+        const context = value as Mocha.Context
+        return [{ ...context.test, parent: context.test?.parent?.title }, context]
+    }
 
     INTERFACES[type].forEach((fnName: string) => {
         const isTest = TEST_INTERFACES[type].flatMap((testCommand: string) => [testCommand, `${testCommand}.only`]).includes(fnName)
         wrapGlobalTestMethod(
             isTest,
             isTest ? beforeTest! : beforeHook!,
-            hookArgsFn as any,
+            hookArgsFn,
             isTest ? afterTest : afterHook,
-            hookArgsFn as any,
+            hookArgsFn,
             fnName,
             cid
         )

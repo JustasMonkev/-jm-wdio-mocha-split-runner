@@ -1,9 +1,9 @@
 import { _setGlobal } from '@wdio/globals'
 import { expect, setOptions } from 'expect-webdriverio'
-import type { Capabilities, Options } from '@wdio/types'
+import type { Capabilities } from '@wdio/types'
 import { DEFAULTS } from 'webdriver'
 import { DEFAULT_CONFIGS } from '@wdio/config'
-import { remote, multiremote, type AttachOptions } from 'webdriverio'
+import { remote, multiremote } from 'webdriverio'
 import { enableFileLogging } from '@wdio/utils'
 import { deepmerge } from 'deepmerge-ts'
 
@@ -17,12 +17,9 @@ export function sanitizeCaps(
         ...Object.keys(DEFAULTS)
     ]
 
-    return Object.keys(caps).filter((key: keyof WebdriverIO.Capabilities) => (
-        !defaultConfigsKeys.includes(key as string) === !filterOut
-    )).reduce((obj: WebdriverIO.Capabilities, key: keyof WebdriverIO.Capabilities) => {
-        obj[key] = caps[key] as undefined
-        return obj
-    }, {})
+    return Object.fromEntries(Object.entries(caps).filter(([key]) => (
+        defaultConfigsKeys.includes(key) === Boolean(filterOut)
+    )))
 }
 
 export async function initializeStubSession(
@@ -41,20 +38,24 @@ export async function initializeStubSession(
 
     let browser: WebdriverIO.Browser | WebdriverIO.MultiRemoteBrowser
     if (!isMultiremote) {
+        // SAFETY: The caller selects standalone mode, whose payload is a flat or W3C capability object.
+        const standalone = capabilities as Capabilities.RequestedStandaloneCapabilities
         const sessionConfig: Capabilities.WebdriverIOConfig = {
             ...stubConfig,
-            ...sanitizeCaps(capabilities as Options.Connection, true),
-            capabilities: sanitizeCaps(capabilities as Capabilities.RequestedStandaloneCapabilities)
+            ...sanitizeCaps(standalone, true),
+            capabilities: sanitizeCaps(standalone)
         }
         browser = await remote(sessionConfig)
     } else {
         const options: Capabilities.RequestedMultiremoteCapabilities = {}
         // @ts-expect-error config mutation matches WDIO runner behavior
         delete stubConfig.capabilities
-        for (const browserName of Object.keys(capabilities)) {
+        // SAFETY: The caller selects multiremote mode, whose payload maps browser names to session options.
+        const multiremoteCaps = capabilities as Capabilities.RequestedMultiremoteCapabilities
+        for (const browserName of Object.keys(multiremoteCaps)) {
             options[browserName] = deepmerge(
                 stubConfig,
-                (capabilities as Capabilities.RequestedMultiremoteCapabilities)[browserName]
+                multiremoteCaps[browserName]
             )
         }
         browser = await multiremote(options, stubConfig)

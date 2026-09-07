@@ -18,29 +18,29 @@ describe('BrowserStack discovery helpers', () => {
     })
 
     it('detects BrowserStack class and instance service entries', () => {
-        class BrowserstackService {}
-        class CustomService {}
+        class BrowserstackService { beforeSession() {} }
+        class CustomService { beforeSession() {} }
 
-        expect(isBrowserstackService(BrowserstackService as unknown as WebdriverIO.ServiceClass)).toBe(true)
+        expect(isBrowserstackService(BrowserstackService)).toBe(true)
         expect(isBrowserstackService([
-            BrowserstackService as unknown as WebdriverIO.ServiceClass,
+            BrowserstackService,
             { testReporting: true }
         ])).toBe(true)
-        expect(isBrowserstackService(new BrowserstackService() as unknown as WebdriverIO.ServiceClass)).toBe(true)
-        expect(isBrowserstackService(CustomService as unknown as WebdriverIO.ServiceClass)).toBe(false)
+        expect(isBrowserstackService(new BrowserstackService())).toBe(true)
+        expect(isBrowserstackService(CustomService)).toBe(false)
     })
 
     it('removes only BrowserStack services during discovery', () => {
         const serviceObject = { beforeSession() {} }
-        class BrowserstackService {}
-        const services = [
+        class BrowserstackService { beforeSession() {} }
+        const services: NonNullable<WebdriverIO.Config['services']> = [
             'browserstack',
             ['@wdio/browserstack-service', { testReporting: true }],
-            [BrowserstackService as unknown as WebdriverIO.ServiceClass, { testReporting: true }],
+            [BrowserstackService, { testReporting: true }],
             'foobar',
             ['custom-service', { enabled: true }],
             serviceObject
-        ] as WebdriverIO.Config['services']
+        ]
 
         expect(getDiscoveryServices(services)).toEqual([
             'foobar',
@@ -50,23 +50,23 @@ describe('BrowserStack discovery helpers', () => {
     })
 
     it('detects when BrowserStack is configured', () => {
-        const services = [
+        const services: NonNullable<WebdriverIO.Config['services']> = [
             'browserstack',
             ['custom-service', { enabled: true }]
-        ] as WebdriverIO.Config['services']
+        ]
 
         expect(hasBrowserstackService(services)).toBe(true)
         expect(hasBrowserstackService([['custom-service', { enabled: true }]])).toBe(false)
     })
 
     it('adds BrowserStack services to ignored discovery worker services', () => {
-        class BrowserstackService {}
-        const services = [
+        class BrowserstackService { beforeSession() {} }
+        const services: NonNullable<WebdriverIO.Config['services']> = [
             'browserstack',
             ['custom-service', { enabled: true }],
             '@wdio/browserstack-service',
-            BrowserstackService as unknown as WebdriverIO.ServiceClass
-        ] as WebdriverIO.Config['services']
+            BrowserstackService
+        ]
 
         expect(getDiscoveryIgnoredWorkerServices(services, ['already-ignored'])).toEqual([
             'already-ignored',
@@ -77,20 +77,20 @@ describe('BrowserStack discovery helpers', () => {
     })
 
     it('removes only BrowserStack launcher instances during discovery', () => {
-        class BrowserstackLauncherService {}
-        class PercyLauncherService {}
+        class BrowserstackLauncherService { onPrepare() {} }
+        class PercyLauncherService { onPrepare() {} }
 
         const browserstackLauncher = new BrowserstackLauncherService()
         const percyLauncher = new PercyLauncherService()
 
         expect(getDiscoveryLauncherServices([
-            browserstackLauncher as object,
-            percyLauncher as object
-        ] as any, ['browserstack'])).toEqual([percyLauncher])
+            browserstackLauncher,
+            percyLauncher
+        ], ['browserstack'])).toEqual([percyLauncher])
         expect(getDiscoveryLauncherServices([
-            browserstackLauncher as object,
-            percyLauncher as object
-        ] as any, ['custom-service'])).toEqual([
+            browserstackLauncher,
+            percyLauncher
+        ], ['custom-service'])).toEqual([
             browserstackLauncher,
             percyLauncher
         ])

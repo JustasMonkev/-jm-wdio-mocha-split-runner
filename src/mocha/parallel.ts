@@ -16,8 +16,8 @@ import type { ParallelRuntimeConfig, ParallelShard, ParallelTestManifest, Parall
 const log = logger('@jm/wdio-mocha-split-runner:mocha')
 const FILE_PROTOCOL = 'file://'
 
-type MochaTest = any
-type MochaSuite = any
+type MochaTest = Mocha.Test & { isOnly?: () => boolean, _only?: boolean }
+type MochaSuite = Mocha.Suite & { hasOnly?: () => boolean, _only?: boolean }
 
 type SelectedRunnable = {
     descriptor: ParallelTestManifestEntry
@@ -41,7 +41,9 @@ export async function createMochaRuntime(
     }
 
     const mocha = new Mocha(mochaOpts)
-    mocha.reporter(NOOP as unknown as Mocha.Reporter)
+    // Base would add listeners that mutate failure objects and test timing metadata.
+    // SAFETY: Mocha only constructs this inert reporter; its typings unnecessarily require Base's methods.
+    mocha.reporter(NOOP as unknown as Mocha.ReporterConstructor)
     mocha.fullTrace()
 
     specs.forEach((spec) => mocha.addFile(spec.startsWith(FILE_PROTOCOL) ? url.fileURLToPath(spec) : spec))
@@ -65,7 +67,7 @@ export async function createMochaRuntime(
 }
 
 export function buildManifest(mocha: Mocha, specFile: string, mochaOpts: MochaOpts): ParallelTestManifest {
-    const tests = collectRunnableTests(mocha.suite as MochaSuite, specFile, mochaOpts).map((entry) => entry.descriptor)
+    const tests = collectRunnableTests(mocha.suite, specFile, mochaOpts).map((entry) => entry.descriptor)
     return {
         specFile,
         tests,
@@ -74,7 +76,7 @@ export function buildManifest(mocha: Mocha, specFile: string, mochaOpts: MochaOp
 }
 
 export function verifyAndPruneToShard(mocha: Mocha, shard: ParallelShard, mochaOpts: MochaOpts) {
-    const selected = collectRunnableTests(mocha.suite as MochaSuite, shard.specFile, mochaOpts)
+    const selected = collectRunnableTests(mocha.suite, shard.specFile, mochaOpts)
     const manifestHash = createManifestHash(selected.map((entry) => entry.descriptor))
     if (manifestHash !== shard.manifestHash) {
         throw new Error(`Parallel manifest mismatch for ${shard.specFile}. Discovery hash ${shard.manifestHash} did not match execution hash ${manifestHash}.`)
@@ -85,7 +87,7 @@ export function verifyAndPruneToShard(mocha: Mocha, shard: ParallelShard, mochaO
         if (!match) {
             throw new Error(`Unable to resolve selected test "${shard.selectorId}" in ${shard.specFile}.`)
         }
-        pruneSuiteTree(mocha.suite as MochaSuite, [match.test])
+        pruneSuiteTree(mocha.suite, [match.test])
         return
     }
 
@@ -107,7 +109,7 @@ export function verifyAndPruneToShard(mocha: Mocha, shard: ParallelShard, mochaO
         throw new Error(`Unable to resolve selected test "${missingSelector}" in ${shard.specFile}.`)
     }
 
-    pruneSuiteTree(mocha.suite as MochaSuite, matchingTests)
+    pruneSuiteTree(mocha.suite, matchingTests)
 }
 
 export function classifyDiscoveryError(error: Error) {
@@ -125,7 +127,7 @@ function collectRunnableTests(root: MochaSuite, specFile: string, mochaOpts: Moc
     const entries: SelectedRunnable[] = []
 
     const visitSuite = (suite: MochaSuite) => {
-        for (const test of suite.tests || []) {
+        for (const test of suite.tests) {
             if (isPending(test)) {
                 continue
             }
@@ -155,7 +157,7 @@ function collectRunnableTests(root: MochaSuite, specFile: string, mochaOpts: Moc
             })
         }
 
-        for (const childSuite of suite.suites || []) {
+        for (const childSuite of suite.suites) {
             visitSuite(childSuite)
         }
     }
@@ -203,7 +205,7 @@ function applyGrep(grep: RegExp, fullTitle: string, invert: boolean) {
 
 function getSuitePath(test: MochaTest) {
     const suitePath: string[] = []
-    let parent = test.parent
+    let parent: MochaSuite | undefined = test.parent
     while (parent && !parent.root) {
         suitePath.unshift(parent.title)
         parent = parent.parent
@@ -219,7 +221,10 @@ function suiteHasOnly(suite: MochaSuite): boolean {
     if (typeof suite.hasOnly === 'function' && suite.hasOnly()) {
         return true
     }
-    if ((suite._onlyTests && suite._onlyTests.length > 0) || (suite._onlySuites && suite._onlySuites.length > 0)) {
+    // Mocha 10 stores exclusive selections in these internal arrays.
+    const onlyTests: Mocha.Test[] = suite['_onlyTests']
+    const onlySuites: Mocha.Suite[] = suite['_onlySuites']
+    if (onlyTests.length > 0 || onlySuites.length > 0) {
         return true
     }
     return suite.suites.some((childSuite: MochaSuite) => suiteHasOnly(childSuite))
@@ -230,9 +235,11 @@ function isInOnlyBranch(test: MochaTest) {
         return true
     }
 
-    let parent = test.parent
+    let parent: MochaSuite | undefined = test.parent
     while (parent) {
-        if (parent._only || parent._onlyTests?.includes(test) || parent._onlySuites?.some((suite: MochaSuite) => isSuiteAncestorOf(test, suite))) {
+        const onlyTests: Mocha.Test[] = parent['_onlyTests']
+        const onlySuites: Mocha.Suite[] = parent['_onlySuites']
+        if (parent._only || onlyTests.includes(test) || onlySuites.some((suite) => isSuiteAncestorOf(test, suite))) {
             return true
         }
         parent = parent.parent
@@ -242,7 +249,7 @@ function isInOnlyBranch(test: MochaTest) {
 }
 
 function isSuiteAncestorOf(test: MochaTest, targetSuite: MochaSuite) {
-    let parent = test.parent
+    let parent: MochaSuite | undefined = test.parent
     while (parent) {
         if (parent === targetSuite) {
             return true

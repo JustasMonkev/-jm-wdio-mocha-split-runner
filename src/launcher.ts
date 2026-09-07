@@ -15,7 +15,7 @@ import type { Capabilities, Services } from '@wdio/types'
 import CLInterface from './cli/interface.js'
 import { runLauncherHook, runOnCompleteHook, runServiceHook, nodeVersion, type HookError } from './cli/utils.js'
 import { WORKER_GROUPLOGS_MESSAGES } from './cli/constants.js'
-import type { ParallelDiscoveryPayload, ParallelTestManifest, ParallelWorkerArgs, ParallelizeTestsConfig } from './types.js'
+import type { ParallelDiscoveryPayload, ParallelDiscoveryResponse, ParallelTestManifest, ParallelWorkerArgs, ParallelizeTestsConfig } from './types.js'
 import { getDiscoveryIgnoredWorkerServices, getDiscoveryLauncherServices } from './browserstack.js'
 
 const log = logger('@jm/wdio-mocha-split-runner')
@@ -65,7 +65,7 @@ export default class ParallelLauncher {
     private _runnerFailed = 0
 
     private _launcher?: Services.ServiceInstance[]
-    private _resolve?: Function
+    private _resolve?: (exitCode: number) => void
     private _runningJobs = new Map<string, ParallelWorkerSpecs>()
     private _jobStartTimes = new Map<string, number>()
 
@@ -80,10 +80,10 @@ export default class ParallelLauncher {
     async run(): Promise<undefined | number> {
         await this.initialize()
         const config = this.configParser.getConfig()
-        const parallelConfig = config.parallelizeTests as ParallelizeTestsConfig | undefined
+        const parallelConfig = config.parallelizeTests
 
         if (!parallelConfig?.enabled) {
-            return new StockLauncher(this._configFilePath, this._args as any, this._isWatchMode).run()
+            return new StockLauncher(this._configFilePath, this._args, this._isWatchMode).run()
         }
 
         if (config.framework !== 'mocha') {
@@ -92,25 +92,27 @@ export default class ParallelLauncher {
 
         if (this._isWatchMode) {
             log.warn('Split test execution is not supported in watch mode yet, falling back to spec-level scheduling')
-            return new StockLauncher(this._configFilePath, this._args as any, this._isWatchMode).run()
+            return new StockLauncher(this._configFilePath, this._args, this._isWatchMode).run()
         }
 
         const capabilities = this.configParser.getCapabilities()
         this.isParallelMultiremote = Array.isArray(capabilities) &&
             capabilities.length > 0 &&
-            capabilities.every(cap => Object.values(cap).length > 0 && Object.values(cap).every(c => typeof c === 'object' && (c as { capabilities: WebdriverIO.Capabilities }).capabilities))
+            capabilities.every(cap => Object.values(cap).length > 0 && Object.values(cap).every(c => typeof c === 'object' && c !== null && 'capabilities' in c && c.capabilities))
         this.isMultiremote = this.isParallelMultiremote || !Array.isArray(capabilities)
 
         await enableFileLogging(config.outputDir)
         logger.setLogLevelsConfig(config.logLevels, config.logLevel)
 
-        const [runnerName, runnerOptions] = Array.isArray(config.runner) ? config.runner : [config.runner, {} as WebdriverIO.BrowserRunnerOptions]
+        const [runnerName, runnerOptions] = Array.isArray(config.runner) ? config.runner : [config.runner, {}]
+        // SAFETY: initializePlugin resolves a WDIO runner module whose default export implements RunnerPlugin.
         const Runner = (await initializePlugin(runnerName, 'runner') as Services.RunnerPlugin).default
         this.runner = new Runner(runnerOptions, config)
 
         exitHook(this._exitHandler.bind(this))
         let exitCode = 0
         let error: HookError | undefined
+        // SAFETY: The testrunner parser returns the configured capability list or multiremote map.
         const caps = this.configParser.getCapabilities() as Capabilities.TestrunnerCapabilities
 
         try {
@@ -127,10 +129,12 @@ export default class ParallelLauncher {
             const totalWorkerCnt = Array.isArray(capabilities)
                 ? capabilities.map((c) => {
                     if (this.isParallelMultiremote) {
-                        const keys = Object.keys(c as Capabilities.RequestedMultiremoteCapabilities)
+                        const keys = Object.keys(c)
+                        // SAFETY: isParallelMultiremote checked that every entry has a capabilities object.
                         const cap = (c as Capabilities.RequestedMultiremoteCapabilities)[keys[0]].capabilities as WebdriverIO.Capabilities
                         return this.configParser.getSpecs(cap['wdio:specs'], cap['wdio:exclude']).length
                     }
+                    // SAFETY: The capability array was classified above; this is its standalone branch.
                     const standaloneCaps = c as Capabilities.RequestedStandaloneCapabilities
                     const cap = 'alwaysMatch' in standaloneCaps ? standaloneCaps.alwaysMatch : standaloneCaps
                     return this.configParser.getSpecs(cap['wdio:specs'], cap['wdio:exclude']).length
@@ -208,7 +212,7 @@ export default class ParallelLauncher {
     }
 
     private _validateParallelConfig(config: Required<WebdriverIO.Config>) {
-        const parallel = config.parallelizeTests as ParallelizeTestsConfig | undefined
+        const parallel = config.parallelizeTests
         if (parallel?.enabled && (config.mochaOpts?.retries || 0) > 0) {
             throw new Error('`mochaOpts.retries` must be 0 when `parallelizeTests.enabled` is true')
         }
@@ -231,42 +235,42 @@ export default class ParallelLauncher {
             (Array.isArray(caps) && caps.length === 0) ||
             (!Array.isArray(caps) && Object.keys(caps).length === 0)
         ) {
-            return new Promise((resolve) => {
-                log.error('Missing capabilities, exiting with failure')
-                return resolve(1)
-            })
+            log.error('Missing capabilities, exiting with failure')
+            return 1
         }
 
-        const parallelConfig = (config.parallelizeTests as ParallelizeTestsConfig | undefined) || { enabled: false }
+        const parallelConfig = config.parallelizeTests || { enabled: false }
         const parallelEnabled = parallelConfig.enabled
 
         const specFileRetries = this._isWatchMode ? 0 : -1
 
         let cid = 0
-        if (this.isMultiremote && !this.isParallelMultiremote) {
-            const specs = this._formatSpecs(caps as Capabilities.RequestedMultiremoteCapabilities, specFileRetries)
+        if (!Array.isArray(caps)) {
+            const specs = this._formatSpecs(caps, specFileRetries)
             this._schedule.push({
                 cid: cid++,
-                caps: caps as Capabilities.RequestedMultiremoteCapabilities,
+                caps: caps,
                 specs: parallelEnabled
-                    ? await this._expandSplitSpecs(specs, caps as Capabilities.RequestedMultiremoteCapabilities, specFileRetries, config)
+                    ? await this._expandSplitSpecs(specs, caps, specFileRetries, config)
                     : specs,
                 availableInstances: config.maxInstances || 1,
                 runningInstances: 0
             })
         } else {
-            for (const capabilities of caps as Capabilities.RequestedStandaloneCapabilities[]) {
+            for (const capabilities of caps) {
+                // SAFETY: WDIO workers accept the original requested capability object; extension fields apply to standalone jobs.
+                const workerCaps = capabilities as WebdriverIO.Capabilities
                 const availableInstances = this.isParallelMultiremote
                     ? config.maxInstances || 1
                     : config.runner === 'browser'
                         ? 1
-                        : (capabilities as WebdriverIO.Capabilities)['wdio:maxInstances'] || config.maxInstancesPerCapability || DEFAULT_MAX_INSTANCES_PER_CAPABILITY_VALUE
+                        : workerCaps['wdio:maxInstances'] || config.maxInstancesPerCapability || DEFAULT_MAX_INSTANCES_PER_CAPABILITY_VALUE
                 const specs = this._formatSpecs(capabilities, specFileRetries)
                 this._schedule.push({
                     cid: cid++,
-                    caps: capabilities as WebdriverIO.Capabilities,
+                    caps: workerCaps,
                     specs: parallelEnabled
-                        ? await this._expandSplitSpecs(specs, capabilities as WebdriverIO.Capabilities, specFileRetries, config)
+                        ? await this._expandSplitSpecs(specs, workerCaps, specFileRetries, config)
                         : specs,
                     availableInstances,
                     runningInstances: 0
@@ -282,7 +286,7 @@ export default class ParallelLauncher {
         return new Promise<number>((resolve) => {
             this._resolve = resolve
 
-            if (Object.values(this._schedule).reduce((specCnt, schedule) => specCnt + schedule.specs.length, 0) === 0) {
+            if (this._schedule.reduce((specCnt, schedule) => specCnt + schedule.specs.length, 0) === 0) {
                 const { total, current } = config.shard
                 if (total > 1) {
                     log.info(`No specs to execute in shard ${current}/${total}, exiting!`)
@@ -303,14 +307,8 @@ export default class ParallelLauncher {
         capabilities: Capabilities.RequestedMultiremoteCapabilities | Capabilities.RequestedStandaloneCapabilities,
         specFileRetries: number
     ): ParallelWorkerSpecs[] {
-        let caps: WebdriverIO.Capabilities
-        if ('alwaysMatch' in capabilities) {
-            caps = capabilities.alwaysMatch as WebdriverIO.Capabilities
-        } else if (typeof Object.keys(capabilities)[0] === 'object' && 'capabilities' in (capabilities as Capabilities.RequestedMultiremoteCapabilities)[Object.keys(capabilities)[0]]) {
-            caps = {} as WebdriverIO.Capabilities
-        } else {
-            caps = capabilities as WebdriverIO.Capabilities
-        }
+        // SAFETY: Standalone overrides are capability fields; multiremote maps use the parser's global specs.
+        const caps = ('alwaysMatch' in capabilities ? capabilities.alwaysMatch : capabilities) as WebdriverIO.Capabilities
 
         const specs = (
             // @ts-expect-error deprecated
@@ -341,7 +339,7 @@ export default class ParallelLauncher {
         specFileRetries: number,
         config: Required<WebdriverIO.Config>
     ): Promise<ParallelWorkerSpecs[]> {
-        const parallelConfig = (config.parallelizeTests as ParallelizeTestsConfig | undefined) || { enabled: false }
+        const parallelConfig = config.parallelizeTests || { enabled: false }
         const expandedSpecs: ParallelWorkerSpecs[] = []
 
         for (const spec of specs) {
@@ -522,8 +520,7 @@ export default class ParallelLauncher {
     }
 
     private _getParallelLimit(config: Required<WebdriverIO.Config>) {
-        const parallelConfig = (config.parallelizeTests as ParallelizeTestsConfig | undefined) || ({} as ParallelizeTestsConfig)
-        return parallelConfig.maxTestsPerFile || config.maxInstances
+        return config.parallelizeTests?.maxTestsPerFile || config.maxInstances
     }
 
     private _isSplitJob(job: ParallelWorkerSpecs) {
@@ -531,8 +528,7 @@ export default class ParallelLauncher {
     }
 
     private _getSplitJobLimit(config: Required<WebdriverIO.Config>) {
-        const parallelConfig = (config.parallelizeTests as ParallelizeTestsConfig | undefined) || ({} as ParallelizeTestsConfig)
-        return parallelConfig.maxSplitInstances
+        return config.parallelizeTests?.maxSplitInstances
     }
 
     private _getRunningTestsForSpecFile(specFile: string) {
@@ -602,7 +598,7 @@ export default class ParallelLauncher {
             const session = schedulableCaps[0]
             const jobIndex = this._findSchedulableJobIndex(session, config)
             const [specs] = session.specs.splice(jobIndex, 1)
-            this._startInstance(specs, session.caps as Capabilities.ResolvedTestrunnerCapabilities, session.cid)
+            this._startInstance(specs, session.caps, session.cid)
             session.availableInstances--
             session.runningInstances++
         }
@@ -611,11 +607,11 @@ export default class ParallelLauncher {
     }
 
     private _getNumberOfRunningInstances(): number {
-        return this._schedule.map((a) => a.runningInstances).reduce((a, b) => a + b, 0)
+        return this._schedule.reduce((count, session) => count + session.runningInstances, 0)
     }
 
     private _getNumberOfSpecsLeft(): number {
-        return this._schedule.map((a) => a.specs.length).reduce((a, b) => a + b, 0)
+        return this._schedule.reduce((count, session) => count + session.specs.length, 0)
     }
 
     private async _discoverSpecsForFile(specFile: string, caps: WebdriverIO.Capabilities): Promise<ParallelTestManifest> {
@@ -635,14 +631,14 @@ export default class ParallelLauncher {
         const workerCaps = structuredClone(caps)
 
         log.info('Run onWorkerStart hook for discovery job')
-        await runLauncherHook(config.onWorkerStart, runnerId, workerCaps, [specFile], discoveryArgs as any, execArgv)
+        await runLauncherHook(config.onWorkerStart, runnerId, workerCaps, [specFile], discoveryArgs, execArgv)
         await runServiceHook(
             getDiscoveryLauncherServices(this._launcher || [], config.services || []),
             'onWorkerStart',
             runnerId,
             workerCaps,
             [specFile],
-            discoveryArgs as any,
+            discoveryArgs,
             execArgv
         )
 
@@ -741,16 +737,16 @@ export default class ParallelLauncher {
 
         log.info('Run onWorkerStart hook')
         try {
-            await runLauncherHook(config.onWorkerStart, runnerId, workerCaps, job.files, workerArgs as any, execArgv)
+            await runLauncherHook(config.onWorkerStart, runnerId, workerCaps, job.files, workerArgs, execArgv)
                 .catch((error) => this._workerHookError(error))
-            await runServiceHook(this._launcher!, 'onWorkerStart', runnerId, workerCaps, job.files, workerArgs as any, execArgv)
+            await runServiceHook(this._launcher!, 'onWorkerStart', runnerId, workerCaps, job.files, workerArgs, execArgv)
                 .catch((error) => this._workerHookError(error))
 
             const worker = await this.runner.run({
                 cid: runnerId,
                 command: 'run',
                 configFile: this._configFilePath,
-                args: workerArgs as any,
+                args: workerArgs,
                 caps: workerCaps,
                 specs: job.files,
                 execArgv,
@@ -819,12 +815,13 @@ export default class ParallelLauncher {
                 worker.removeAllListeners('exit')
             }
 
-            worker.on('message', (message: any) => {
-                if (message?.ready) {
+            worker.on('message', (message: ParallelDiscoveryResponse) => {
+                if (!message || typeof message !== 'object') return
+                if ('ready' in message && message.ready) {
                     worker.send(payload)
                     return
                 }
-                if (message?.ok && message.manifest) {
+                if (message.ok && 'manifest' in message && message.manifest) {
                     cleanup()
                     resolve(message.manifest)
                     return

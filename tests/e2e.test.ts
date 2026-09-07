@@ -45,6 +45,7 @@ function readTrace(traceFile: string): TraceEvent[] {
     return fs.readFileSync(traceFile, 'utf8')
         .split('\n')
         .filter(Boolean)
+        // SAFETY: The example trace writer serializes one event per line into this scenario's private file.
         .map((line) => JSON.parse(line) as TraceEvent)
 }
 

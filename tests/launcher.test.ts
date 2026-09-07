@@ -1,75 +1,37 @@
 import { EventEmitter } from 'node:events'
+import { fileURLToPath } from 'node:url'
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import logger from '@wdio/logger'
 
 import ParallelLauncher from '../src/launcher.js'
+import WDIOCLInterface from '../src/cli/interface.js'
 
 const caps: WebdriverIO.Capabilities = {
     browserName: 'chrome',
     'wdio:maxInstances': 2
 }
 
-vi.mock('node:fs/promises', () => ({
-    default: {
-        access: vi.fn().mockRejectedValue(new Error('ENOENT')),
-        mkdir: vi.fn()
-    }
-}))
-vi.mock('async-exit-hook', () => ({
-    default: vi.fn()
-}))
-vi.mock('import-meta-resolve', () => ({
-    resolve: vi.fn().mockReturnValue('/tmp/tsx.js')
-}))
-vi.mock('@wdio/cli', () => ({
-    Launcher: class {
-        run = vi.fn()
-    }
-}))
-vi.mock('@wdio/utils', () => import('../../webdriverio/__mocks__/@wdio/utils'))
-vi.mock('@wdio/utils/node', () => ({
-    setupDriver: vi.fn(),
-    setupBrowser: vi.fn()
-}))
-vi.mock('@wdio/config', () => import('../../webdriverio/__mocks__/@wdio/config'))
-vi.mock('@wdio/config/node', () => import('../../webdriverio/__mocks__/@wdio/config/node'))
-vi.mock('@wdio/logger', () => import('../../webdriverio/__mocks__/@wdio/logger'))
-vi.mock('../src/cli/interface', () => ({
-    default: class {
-        totalWorkerCnt: number
-        hasAnsiSupport = true
-        emit = vi.fn()
-        on = vi.fn()
-        sigintTrigger = vi.fn()
-        onMessage = vi.fn()
-        logHookError = vi.fn()
-        finalise = vi.fn()
-
-        constructor (_config: WebdriverIO.Config, totalWorkerCnt: number) {
-            this.totalWorkerCnt = totalWorkerCnt
-        }
-    }
-}))
-
 describe('ParallelLauncher', () => {
     let launcher: ParallelLauncher
 
-    beforeEach(() => {
-        launcher = new ParallelLauncher('./')
-        launcher.interface = {
-            emit: vi.fn(),
-            on: vi.fn(),
-            onMessage: vi.fn(),
-            sigintTrigger: vi.fn(),
-            finalise: vi.fn()
-        } as any
+    function runtimeConfig(overrides: Partial<WebdriverIO.Config>) {
+        return { ...launcher.configParser.getConfig(), ...overrides }
+    }
+
+    beforeEach(async () => {
+        vi.restoreAllMocks()
+        launcher = new ParallelLauncher(fileURLToPath(new URL('./fixtures/wdio.conf.mjs', import.meta.url)))
+        await launcher.configParser.initialize()
+        launcher.interface = new WDIOCLInterface({ capabilities: [] }, 0)
+        vi.spyOn(logger('@jm/wdio-mocha-split-runner'), 'warn').mockImplementation(() => {})
+        vi.spyOn(logger('@jm/wdio-mocha-split-runner'), 'debug').mockImplementation(() => {})
     })
 
     it('rejects Mocha retries when split mode is enabled', async () => {
         await expect(
-            launcher['_runMode']({
+            launcher['_runMode'](runtimeConfig({
                 specs: ['./a.js'],
                 shard: { current: 1, total: 1 },
                 maxInstances: 2,
@@ -78,13 +40,13 @@ describe('ParallelLauncher', () => {
                 outputDir: './tmp',
                 parallelizeTests: { enabled: true },
                 mochaOpts: { retries: 1 }
-            } as any, [caps])
+            }), [caps])
         ).rejects.toThrow('`mochaOpts.retries` must be 0')
     })
 
     it('rejects invalid maxSplitInstances values', async () => {
         await expect(
-            launcher['_runMode']({
+            launcher['_runMode'](runtimeConfig({
                 specs: ['./a.js'],
                 shard: { current: 1, total: 1 },
                 maxInstances: 2,
@@ -94,13 +56,13 @@ describe('ParallelLauncher', () => {
                 framework: 'mocha',
                 parallelizeTests: { enabled: true, maxSplitInstances: 0 },
                 mochaOpts: { retries: 0 }
-            } as any, [caps])
+            }), [caps])
         ).rejects.toThrow('`parallelizeTests.maxSplitInstances` must be an integer greater than 0 when set')
     })
 
     it('rejects invalid batchSize values', async () => {
         await expect(
-            launcher['_runMode']({
+            launcher['_runMode'](runtimeConfig({
                 specs: ['./a.js'],
                 shard: { current: 1, total: 1 },
                 maxInstances: 2,
@@ -110,13 +72,14 @@ describe('ParallelLauncher', () => {
                 framework: 'mocha',
                 parallelizeTests: { enabled: true, batchSize: 0 },
                 mochaOpts: { retries: 0 }
-            } as any, [caps])
+            }), [caps])
         ).rejects.toThrow('`parallelizeTests.batchSize` must be an integer greater than 0 when set')
     })
 
     it('keeps stock formatting behavior when split mode is disabled', () => {
         launcher.configParser.getSpecs = vi.fn().mockReturnValue(['/a.js', ['/b.js', '/c.js']])
-        const formatted = launcher['_formatSpecs']({ specs: ['/a.js', ['/b.js', '/c.js']] } as any, 2)
+        const capabilities = { ...caps, specs: ['/a.js', ['/b.js', '/c.js']] }
+        const formatted = launcher['_formatSpecs'](capabilities, 2)
         expect(formatted).toEqual([
             { files: ['/a.js'], retries: 2, jobType: 'spec' },
             { files: ['/b.js', '/c.js'], retries: 2, jobType: 'spec' }
@@ -124,8 +87,8 @@ describe('ParallelLauncher', () => {
     })
 
     it('provides a dedicated discovery seam for single-file specs', async () => {
-        const specs = [{ files: ['/a.js'], retries: 3 }, { files: ['/b.js', '/c.js'], retries: 3 }] as any
-        const discoverSpy = vi.spyOn(launcher as any, '_discoverSpecsForFile').mockResolvedValue({
+        const specs = [{ files: ['/a.js'], retries: 3 }, { files: ['/b.js', '/c.js'], retries: 3 }]
+        const discoverSpy = launcher['_discoverSpecsForFile'] = vi.fn<ParallelLauncher['_discoverSpecsForFile']>().mockResolvedValue({
             specFile: '/a.js',
             manifestHash: 'hash',
             tests: [
@@ -135,10 +98,10 @@ describe('ParallelLauncher', () => {
             fallbackToSpecLevel: false
         })
 
-        const expanded = await launcher['_expandSplitSpecs'](specs, caps, 3, {
+        const expanded = await launcher['_expandSplitSpecs'](specs, caps, 3, runtimeConfig({
             parallelizeTests: { enabled: true },
             maxInstances: 4
-        } as any)
+        }))
 
         expect(discoverSpy).toHaveBeenCalledWith('/a.js', caps)
         expect(expanded).toEqual([
@@ -166,7 +129,7 @@ describe('ParallelLauncher', () => {
     })
 
     it('falls back to spec-level execution when discovery requests fallback', async () => {
-        vi.spyOn(launcher as any, '_discoverSpecsForFile').mockResolvedValue({
+        launcher['_discoverSpecsForFile'] = vi.fn<ParallelLauncher['_discoverSpecsForFile']>().mockResolvedValue({
             specFile: '/a.js',
             manifestHash: 'hash',
             tests: [],
@@ -174,16 +137,16 @@ describe('ParallelLauncher', () => {
             discoveryWarnings: ['fallback']
         })
 
-        const expanded = await launcher['_expandSplitSpecs']([{ files: ['/a.js'], retries: 1 }] as any, caps, 1, {
+        const expanded = await launcher['_expandSplitSpecs']([{ files: ['/a.js'], retries: 1 }], caps, 1, runtimeConfig({
             parallelizeTests: { enabled: true }
-        } as any)
+        }))
 
         expect(logger('@jm/wdio-mocha-split-runner').warn).toHaveBeenCalledWith(expect.stringContaining('fallback'))
         expect(expanded).toEqual([{ files: ['/a.js'], retries: 1 }])
     })
 
     it('prefers parallelizeTests.retries for split jobs when configured', async () => {
-        vi.spyOn(launcher as any, '_discoverSpecsForFile').mockResolvedValue({
+        launcher['_discoverSpecsForFile'] = vi.fn<ParallelLauncher['_discoverSpecsForFile']>().mockResolvedValue({
             specFile: '/a.js',
             manifestHash: 'hash',
             tests: [
@@ -192,9 +155,9 @@ describe('ParallelLauncher', () => {
             fallbackToSpecLevel: false
         })
 
-        const expanded = await launcher['_expandSplitSpecs']([{ files: ['/a.js'], retries: 3 }] as any, caps, 3, {
+        const expanded = await launcher['_expandSplitSpecs']([{ files: ['/a.js'], retries: 3 }], caps, 3, runtimeConfig({
             parallelizeTests: { enabled: true, retries: 2 }
-        } as any)
+        }))
 
         expect(expanded).toEqual([
             {
@@ -209,7 +172,7 @@ describe('ParallelLauncher', () => {
     })
 
     it('groups split candidates into subset shard jobs when batchSize is greater than one', async () => {
-        vi.spyOn(launcher as any, '_discoverSpecsForFile').mockResolvedValue({
+        launcher['_discoverSpecsForFile'] = vi.fn<ParallelLauncher['_discoverSpecsForFile']>().mockResolvedValue({
             specFile: '/a.js',
             manifestHash: 'hash',
             tests: [
@@ -220,10 +183,10 @@ describe('ParallelLauncher', () => {
             fallbackToSpecLevel: false
         })
 
-        const expanded = await launcher['_expandSplitSpecs']([{ files: ['/a.js'], retries: 3, jobType: 'spec' }] as any, caps, 3, {
+        const expanded = await launcher['_expandSplitSpecs']([{ files: ['/a.js'], retries: 3, jobType: 'spec' }], caps, 3, runtimeConfig({
             parallelizeTests: { enabled: true, batchSize: 2 },
             maxInstances: 4
-        } as any)
+        }))
 
         expect(expanded).toEqual([
             {
@@ -246,7 +209,7 @@ describe('ParallelLauncher', () => {
     })
 
     it('logs discovery phase timing after manifest discovery', async () => {
-        vi.spyOn(launcher as any, '_runDiscoveryWorker').mockResolvedValue({
+        launcher['_runDiscoveryWorker'] = vi.fn<ParallelLauncher['_runDiscoveryWorker']>().mockResolvedValue({
             specFile: '/a.js',
             manifestHash: 'hash',
             tests: [
@@ -271,11 +234,15 @@ describe('ParallelLauncher', () => {
     })
 
     it('logs worker startup timing when a job starts', async () => {
-        const worker = new EventEmitter() as EventEmitter & { logsAggregator: string[] }
-        worker.logsAggregator = []
+        const worker = Object.assign(new EventEmitter(), { logsAggregator: [] })
         launcher.runner = {
-            run: vi.fn().mockResolvedValue(worker)
-        } as any
+            run: vi.fn().mockReturnValue(worker),
+            initialize: async () => {},
+            shutdown: async () => true,
+            getWorkerCount: () => 1,
+            workerPool: {},
+            browserPool: {}
+        }
         launcher['_launcher'] = []
         launcher.configParser.getConfig = vi.fn().mockReturnValue({
             execArgv: [],
@@ -293,7 +260,7 @@ describe('ParallelLauncher', () => {
             specFile: '/a.js',
             selectorIds: ['one', 'two'],
             manifestHash: 'hash'
-        }, caps as any, 0)
+        }, caps, 0)
 
         expect(logger('@jm/wdio-mocha-split-runner').debug).toHaveBeenCalledWith(
             expect.stringMatching(/\[perf\] worker 0-0 started in \d+ms \(subset\)/)
@@ -301,7 +268,7 @@ describe('ParallelLauncher', () => {
     })
 
     it('does not split by test title patterns anymore', async () => {
-        vi.spyOn(launcher as any, '_discoverSpecsForFile').mockResolvedValue({
+        launcher['_discoverSpecsForFile'] = vi.fn<ParallelLauncher['_discoverSpecsForFile']>().mockResolvedValue({
             specFile: '/a.js',
             manifestHash: 'hash',
             tests: [
@@ -312,16 +279,16 @@ describe('ParallelLauncher', () => {
             fallbackToSpecLevel: false
         })
 
-        const expanded = await launcher['_expandSplitSpecs']([{ files: ['/a.js'], retries: 2, jobType: 'spec' }] as any, caps, 2, {
+        const expanded = await launcher['_expandSplitSpecs']([{ files: ['/a.js'], retries: 2, jobType: 'spec' }], caps, 2, runtimeConfig({
             parallelizeTests: { enabled: true, tests: ['alpha'] },
             maxInstances: 2
-        } as any)
+        }))
 
         expect(expanded).toEqual([{ files: ['/a.js'], retries: 2, jobType: 'spec' }])
     })
 
     it('matches tests by file path patterns only', async () => {
-        vi.spyOn(launcher as any, '_discoverSpecsForFile').mockResolvedValue({
+        launcher['_discoverSpecsForFile'] = vi.fn<ParallelLauncher['_discoverSpecsForFile']>().mockResolvedValue({
             specFile: 'file:///Users/test/project/specs/alpha.e2e.ts',
             manifestHash: 'hash',
             tests: [
@@ -345,10 +312,10 @@ describe('ParallelLauncher', () => {
             files: ['file:///Users/test/project/specs/alpha.e2e.ts'],
             retries: 2,
             jobType: 'spec'
-        }] as any, caps, 2, {
+        }], caps, 2, runtimeConfig({
             parallelizeTests: { enabled: true, tests: ['**/alpha.e2e.ts'] },
             maxInstances: 2
-        } as any)
+        }))
 
         expect(expanded).toEqual([
             {
@@ -371,7 +338,7 @@ describe('ParallelLauncher', () => {
     })
 
     it('supports wildcard file matching for include and tests', async () => {
-        const discoverSpy = vi.spyOn(launcher as any, '_discoverSpecsForFile').mockResolvedValue({
+        const discoverSpy = launcher['_discoverSpecsForFile'] = vi.fn<ParallelLauncher['_discoverSpecsForFile']>().mockResolvedValue({
             specFile: 'file:///Users/test/project/specs/alpha.e2e.ts',
             manifestHash: 'hash',
             tests: [
@@ -395,14 +362,14 @@ describe('ParallelLauncher', () => {
             files: ['file:///Users/test/project/specs/alpha.e2e.ts'],
             retries: 2,
             jobType: 'spec'
-        }] as any, caps, 2, {
+        }], caps, 2, runtimeConfig({
             parallelizeTests: {
                 enabled: true,
                 include: ['**/alpha.e2e.ts'],
                 tests: ['**/alpha.e2e.ts']
             },
             maxInstances: 2
-        } as any)
+        }))
 
         expect(discoverSpy).toHaveBeenCalled()
         expect(expanded).toHaveLength(2)
@@ -429,7 +396,7 @@ describe('ParallelLauncher', () => {
             ],
             availableInstances: 2,
             runningInstances: 1
-        }] as any
+        }]
         launcher.configParser.getConfig = vi.fn().mockReturnValue({
             maxInstances: 5,
             parallelizeTests: { enabled: true, maxTestsPerFile: 1 },
@@ -464,7 +431,7 @@ describe('ParallelLauncher', () => {
             ],
             availableInstances: 2,
             runningInstances: 1
-        }] as any
+        }]
         launcher.configParser.getConfig = vi.fn().mockReturnValue({
             maxInstances: 5,
             parallelizeTests: { enabled: true, maxTestsPerFile: 1 },
@@ -499,7 +466,7 @@ describe('ParallelLauncher', () => {
             ],
             availableInstances: 2,
             runningInstances: 1
-        }] as any
+        }]
         launcher.configParser.getConfig = vi.fn().mockReturnValue({
             maxInstances: 5,
             parallelizeTests: { enabled: true, maxTestsPerFile: 2, maxSplitInstances: 1 },
@@ -531,7 +498,7 @@ describe('ParallelLauncher', () => {
             ],
             availableInstances: 2,
             runningInstances: 1
-        }] as any
+        }]
         launcher.configParser.getConfig = vi.fn().mockReturnValue({
             maxInstances: 5,
             parallelizeTests: { enabled: true, maxTestsPerFile: 2, maxSplitInstances: 1 },
@@ -567,7 +534,7 @@ describe('ParallelLauncher', () => {
             ],
             availableInstances: 3,
             runningInstances: 1
-        }] as any
+        }]
         launcher.configParser.getConfig = vi.fn().mockReturnValue({
             maxInstances: 5,
             parallelizeTests: { enabled: true, maxTestsPerFile: 1, maxSplitInstances: 2 },

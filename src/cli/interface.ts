@@ -18,14 +18,17 @@ interface TestError {
     stack?: string
 }
 
-interface CLIInterfaceEvent {
-    origin?: string
-    name: string
+interface TestErrorEvent {
     cid?: string
     fullTitle?: string
-    content?: any
-    params?: any
-    error?: TestError
+    error?: TestError | string
+}
+
+interface CLIInterfaceEvent extends TestErrorEvent {
+    origin?: string
+    name: string
+    content?: unknown
+    params?: { introMessage: string }
 }
 
 export default class WDIOCLInterface extends EventEmitter {
@@ -47,9 +50,9 @@ export default class WDIOCLInterface extends EventEmitter {
     private _skippedSpecs = 0
     private _inDebugMode = false
     private _start = new Date()
-    private _messages = {
-        reporter: {} as Record<string, string[]>,
-        debugger: {} as Record<string, string[]>
+    private _messages: Record<'reporter' | 'debugger', Record<string, unknown[]>> = {
+        reporter: {},
+        debugger: {}
     }
 
     constructor(
@@ -133,8 +136,9 @@ export default class WDIOCLInterface extends EventEmitter {
             } else {
                 details.push('in', runnerName)
             }
-            if (caps?.platformName || caps?.['appium:deviceName']) {
-                details.push('on', (caps?.platformName || caps?.['appium:deviceName']) as string)
+            const device = caps?.platformName || caps?.['appium:deviceName']
+            if (device) {
+                details.push('on', device)
             }
             details.push(this.getFilenames(job.specs))
         }
@@ -144,11 +148,12 @@ export default class WDIOCLInterface extends EventEmitter {
         return _logger(...details)
     }
 
-    onTestError(payload: CLIInterfaceEvent) {
+    onTestError(payload: TestErrorEvent) {
+        const details: Partial<TestError> | undefined = typeof payload.error === 'string' ? { message: payload.error } : payload.error
         const error: TestError = {
-            type: payload.error?.type || 'Error',
-            message: payload.error?.message || (typeof payload.error === 'string' ? payload.error : 'Unknown error.'),
-            stack: payload.error?.stack
+            type: details?.type || 'Error',
+            message: details?.message || 'Unknown error.',
+            stack: details?.stack
         }
 
         return this.log(`[${payload.cid}]`, `${chalk.red(error.type)} in "${payload.fullTitle}"\n${chalk.red(error.stack || error.message)}`)
@@ -218,7 +223,7 @@ export default class WDIOCLInterface extends EventEmitter {
             return
         }
         if (event.origin === 'debugger' && event.name === 'start') {
-            this.log(chalk.yellow(event.params.introMessage))
+            this.log(chalk.yellow(event.params!.introMessage))
             this._inDebugMode = true
             return this._inDebugMode
         }
@@ -230,14 +235,19 @@ export default class WDIOCLInterface extends EventEmitter {
             return this.emit('job:start', event.content)
         }
         if (event.name === 'snapshot') {
+            // SAFETY: WDIO snapshot messages carry the snapshot manager's result array.
             const snapshotResults = event.content as SnapshotResult[]
             return snapshotResults.forEach((snapshotResult) => this.#snapshotManager.add(snapshotResult))
         }
         if (event.name === 'error') {
+            const content = event.content
+            const details = content && typeof content === 'object'
+                ? ('message' in content && content.message) || ('stack' in content && content.stack) || content
+                : content
             return this.log(
                 `[${event.cid}]`,
                 chalk.white(chalk.bgRed(chalk.bold(' Error: '))),
-                event.content ? (event.content.message || event.content.stack || event.content) : ''
+                details || ''
             )
         }
         if (event.origin !== 'reporter' && event.origin !== 'debugger') {
@@ -247,7 +257,8 @@ export default class WDIOCLInterface extends EventEmitter {
             return this.log(event.cid, event.origin, event.name, event.content)
         }
         if (event.name === 'printFailureMessage') {
-            return this.onTestError(event.content)
+            // SAFETY: Reporter printFailureMessage events carry the test error fields consumed here.
+            return this.onTestError(event.content as TestErrorEvent)
         }
         if (!this._messages[event.origin][event.name]) {
             this._messages[event.origin][event.name] = []
