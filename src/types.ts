@@ -121,6 +121,11 @@ export interface ParallelWorkerArgs {
     [key: string]: unknown
 }
 
+export type ParallelDiscoveryResponse =
+    | { ok: true, ready: true }
+    | { ok: true, manifest: ParallelTestManifest }
+    | { ok: false, error: { message: string, stack?: string } }
+
 export interface ParallelDiscoveryPayload {
     cid: string
     configFile: string

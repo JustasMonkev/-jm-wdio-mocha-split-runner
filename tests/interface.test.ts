@@ -46,15 +46,16 @@ describe('WDIOCLInterface', () => {
 
     it('renders colored start output for shard, debug, and watch mode', () => {
         const cli = new WDIOCLInterface({
+            capabilities: [],
             shard: { current: 2, total: 3 }
-        } as WebdriverIO.Config, 4, true)
+        }, 4, true)
         const logSpy = vi.spyOn(cli, 'log')
 
         cli.onMessage({
             origin: 'debugger',
             name: 'start',
             params: { introMessage: 'Debugger attached' }
-        } as any)
+        })
         cli.onStart()
 
         expect(logSpy).toHaveBeenCalledWith('<yellow>Debugger attached</yellow>')
@@ -68,9 +69,10 @@ describe('WDIOCLInterface', () => {
 
     it('renders colored status lines for running, retry, and pass', () => {
         const cli = new WDIOCLInterface({
+            capabilities: [],
             specFileRetries: 2,
             specFileRetriesDelay: 3
-        } as WebdriverIO.Config, 1)
+        }, 1)
         const logSpy = vi.spyOn(cli, 'log')
         const job = {
             caps: {
@@ -82,9 +84,9 @@ describe('WDIOCLInterface', () => {
             hasTests: true
         }
 
-        cli.addJob({ cid: '0-0', ...job } as any)
+        cli.addJob({ cid: '0-0', ...job })
         cli.clearJob({ cid: '0-0', passed: false, retries: 1 })
-        cli.addJob({ cid: '0-0', ...job } as any)
+        cli.addJob({ cid: '0-0', ...job })
         cli.clearJob({ cid: '0-0', passed: true, retries: 0 })
 
         expect(logSpy).toHaveBeenCalledWith(
@@ -119,10 +121,10 @@ describe('WDIOCLInterface', () => {
     })
 
     it('renders colored summary and skip output', () => {
-        const cli = new WDIOCLInterface({} as WebdriverIO.Config, 3)
+        const cli = new WDIOCLInterface({ capabilities: [] }, 3)
         const logSpy = vi.spyOn(cli, 'log')
 
-        ;(cli as any)._skippedSpecs = 1
+        cli['_skippedSpecs'] = 1
         cli.result = {
             finished: 2,
             passed: 1,
@@ -135,7 +137,7 @@ describe('WDIOCLInterface', () => {
             caps: { browserName: 'chrome' },
             specs: [alphaSpecPath],
             hasTests: false
-        } as any)
+        })
         cli.printSummary()
 
         expect(loggerInfo).toHaveBeenCalledWith(
@@ -157,7 +159,7 @@ describe('WDIOCLInterface', () => {
     })
 
     it('renders colored test errors', () => {
-        const cli = new WDIOCLInterface({} as WebdriverIO.Config, 1)
+        const cli = new WDIOCLInterface({ capabilities: [] }, 1)
         const logSpy = vi.spyOn(cli, 'log')
 
         cli.onTestError({
@@ -167,7 +169,7 @@ describe('WDIOCLInterface', () => {
                 type: 'AssertionError',
                 message: 'boom'
             }
-        } as any)
+        })
 
         expect(logSpy).toHaveBeenCalledWith(
             '[0-0]',

@@ -7,14 +7,13 @@ import type { Services } from '@wdio/types'
 import { formatMessage } from './mocha/common.js'
 import { EVENTS } from './mocha/constants.js'
 import { createMochaRuntime, buildManifest, verifyAndPruneToShard } from './mocha/parallel.js'
-import type { FrameworkMessage, MochaError, MochaOpts } from './mocha/types.js'
+import type { FrameworkMessage, MochaError, MochaPayload } from './mocha/types.js'
 import type { EventEmitter } from 'node:events'
 import type { ParallelRuntimeConfig } from './types.js'
 
 const log = logger('@jm/wdio-mocha-split-runner:framework')
 
 type EventTypes = 'hook' | 'test' | 'suite'
-type EventTypeProps = '_hookCnt' | '_testCnt' | '_suiteCnt'
 
 class ParallelMochaAdapter {
     private _mocha?: Awaited<ReturnType<typeof createMochaRuntime>>
@@ -61,7 +60,7 @@ class ParallelMochaAdapter {
     async run() {
         const mocha = this._mocha
         if (!mocha) {
-            await executeHooksWithArgs('after', this._config.after as Function, [this._specLoadError, this._capabilities, this._specs])
+            await executeHooksWithArgs('after', this._config.after, [this._specLoadError, this._capabilities, this._specs])
             if (this._specLoadError) {
                 throw this._specLoadError
             }
@@ -69,7 +68,7 @@ class ParallelMochaAdapter {
         }
 
         let runtimeError
-        injectSuiteHooks(mocha.suite as Mocha.Suite, (hookName, suite) => this.wrapSuiteHook(hookName, suite))
+        injectSuiteHooks(mocha.suite, (hookName, suite) => this.wrapSuiteHook(hookName, suite))
 
         const result = await new Promise<number>((resolve) => {
             try {
@@ -80,10 +79,12 @@ class ParallelMochaAdapter {
                 return
             }
 
-            Object.keys(EVENTS).forEach((eventName: keyof typeof EVENTS) => this._runner!.on(eventName, this.emit.bind(this, EVENTS[eventName])))
+            for (const [eventName, messageType] of Object.entries(EVENTS)) {
+                this._runner.on(eventName, this.emit.bind(this, messageType))
+            }
         })
 
-        await executeHooksWithArgs('after', this._config.after as Function, [runtimeError || this._specLoadError || result, this._capabilities, this._specs])
+        await executeHooksWithArgs('after', this._config.after, [runtimeError || this._specLoadError || result, this._capabilities, this._specs])
 
         if (runtimeError || this._specLoadError) {
             throw runtimeError || this._specLoadError
@@ -95,27 +96,27 @@ class ParallelMochaAdapter {
     wrapSuiteHook(hookName: keyof Services.HookFunctions, suite: Mocha.Suite) {
         return () => executeHooksWithArgs(
             hookName,
-            this._config[hookName] as Function,
+            this._config[hookName],
             [this.prepareSuiteMessage(hookName, suite)]
         ).catch((err) => {
-            log.error(`Error in ${hookName} hook: ${(err as Error).stack?.slice(7)}`)
+            log.error(`Error in ${hookName} hook: ${err instanceof Error ? err.stack?.slice(7) : String(err)}`)
         })
     }
 
-    prepareSuiteMessage(hookName: keyof Services.HookFunctions, suite: Mocha.Suite) {
+    prepareSuiteMessage(hookName: keyof Services.HookFunctions, suite: Mocha.Suite & { duration?: number }) {
         const params: FrameworkMessage = { type: hookName, payload: suite }
         const key = suite.fullTitle() || suite.title
         if (hookName === 'beforeSuite') {
             this._suiteStartDate.set(key, Date.now())
         }
         if (hookName === 'afterSuite') {
-            ;(suite as { duration?: number }).duration = (suite as { duration?: number }).duration || (Date.now() - (this._suiteStartDate.get(key) || Date.now()))
+            suite.duration = suite.duration || (Date.now() - (this._suiteStartDate.get(key) || Date.now()))
         }
         return formatMessage(params)
     }
 
-    emit(event: string, payload: Record<string, unknown>, err?: MochaError) {
-        if ((payload as { root?: boolean }).root) {
+    emit(event: string, payload: MochaPayload, err?: MochaError) {
+        if (payload.root) {
             return
         }
 
@@ -127,15 +128,15 @@ class ParallelMochaAdapter {
     }
 
     getSyncEventIdStart(type: EventTypes) {
-        const prop = `_${type}Cnt` as EventTypeProps
+        const prop = `_${type}Cnt` as const
         const suiteId = this._suiteIds[this._suiteIds.length - 1]
-        const cnt = this[prop].has(suiteId) ? this[prop].get(suiteId) || 0 : 0
+        const cnt = this[prop].get(suiteId) || 0
         this[prop].set(suiteId, cnt + 1)
         return `${type}-${suiteId}-${cnt}`
     }
 
     getSyncEventIdEnd(type: EventTypes) {
-        const prop = `_${type}Cnt` as EventTypeProps
+        const prop = `_${type}Cnt` as const
         const suiteId = this._suiteIds[this._suiteIds.length - 1]
         const cnt = this[prop].get(suiteId)! - 1
         return `${type}-${suiteId}-${cnt}`
@@ -185,12 +186,8 @@ function injectSuiteHooks(suite: Mocha.Suite, wrapHook: (hookName: keyof Service
     }
 }
 
-const adapterFactory: { init?: Function } = {}
-
-adapterFactory.init = async function (...args: unknown[]) {
-    // @ts-ignore just passing through args
-    const adapter = new ParallelMochaAdapter(...args)
-    return adapter.init()
+const adapterFactory = {
+    init: (...args: ConstructorParameters<typeof ParallelMochaAdapter>) => new ParallelMochaAdapter(...args).init()
 }
 
 export default adapterFactory

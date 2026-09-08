@@ -29,7 +29,7 @@ export interface MochaError {
 
 export interface FrameworkMessage {
     type: string
-    payload?: unknown
+    payload?: MochaPayload
     err?: MochaError
 }
 
@@ -49,4 +49,17 @@ export interface FormattedMessage {
     error?: MochaError
     context?: unknown
     body?: string
+}
+
+export interface MochaPayload {
+    root?: boolean
+    title: string
+    parent?: MochaPayload | null
+    file?: string
+    duration?: number
+    body?: string
+    context?: unknown
+    state?: string
+    pending?: boolean
+    ctx?: Mocha.Context
 }
